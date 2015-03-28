@@ -5,116 +5,108 @@ class Vector
 end
 
 class Simplex
-  DEFAULT_MAX_PIVOTS = 10_000
-
   class UnboundedProblem < StandardError
   end
 
-  attr_accessor :max_pivots
-
-  def initialize(c, a, b)
-    @pivot_count = 0
-    @max_pivots = DEFAULT_MAX_PIVOTS
+  def initialize(objetiva, restricoes, constantes)
 
     # Problem dimensions
-    @num_non_slack_vars = a.first.length
-    @num_constraints    = b.length
-    @num_vars           = @num_non_slack_vars + @num_constraints
+    @num_var_normais = restricoes.first.length
+    @num_constantes = constantes.length
+    @num_var_totais = @num_var_normais + @num_constantes
 
     # Set up initial matrix A and vectors b, c
-    @c = Vector[*c.map {|c1| -1*c1 } + [0]*@num_constraints]
-    @a = a.map {|a1| Vector[*(a1.clone + [0]*@num_constraints)]}
-    @b = Vector[*b.clone]
+    @objetiva = Vector[*objetiva.map { |o| -1*o } + [0]*@num_constantes]
+    @retricoes = restricoes.map { |r| Vector[*(r.clone + [0]*@num_constantes)]}
+    @constantes = Vector[*constantes.clone]
 
-    unless @a.all? {|a| a.size == @c.size } and @b.size == @a.length
-      raise ArgumentError, "Input arrays have mismatched dimensions" 
+    unless @retricoes.all? { |r| r.size == @objetiva.size } and @constantes.size == @retricoes.length
+      raise ArgumentError, "A quantidade de variáveis deve ser igual para todas as retrições. Caso não exista coloque 0"
     end
 
-    0.upto(@num_constraints - 1) {|i| @a[i][@num_non_slack_vars + i] = 1 }
+    0.upto(@num_constantes - 1) {|i| @retricoes[i][@num_var_normais + i] = 1 }
 
-    # set initial solution: all non-slack variables = 0
-    @x          = Vector[*([0]*@num_vars)]
-    @basic_vars = (@num_non_slack_vars...@num_vars).to_a
-    update_solution
+    # set initial solucao: all non-slack variaveis = 0
+    @x          = Vector[*([0]*@num_var_totais)]
+    @vars_basicas = (@num_var_normais...@num_var_totais).to_a
+    att_solucao
   end
 
-  def solution
-    solve
-    current_solution
+  def solucao
+    resolve
+    solucao_corrente
   end
 
-  def current_solution
-    @x.to_a[0...@num_non_slack_vars]
+  def solucao_corrente
+    @x.to_a[0...@num_var_normais]
   end
 
-  def update_solution
-    0.upto(@num_vars - 1) {|i| @x[i] = 0 }
+  def att_solucao
+    0.upto(@num_var_totais - 1) {|i| @x[i] = 0 }
 
-    @basic_vars.each do |basic_var|
-      row_with_1 = row_indices.detect do |row_ix|
-        @a[row_ix][basic_var] == 1
+    @vars_basicas.each do |basic_var|
+      row_with_1 = indice_linha.detect do |row_ix|
+        @retricoes[row_ix][basic_var] == 1
       end
-      @x[basic_var] = @b[row_with_1]
+      @x[basic_var] = @constantes[row_with_1]
     end
   end
 
-  def solve
-    while can_improve?
-      @pivot_count += 1
-      raise "Too many pivots" if @pivot_count > max_pivots 
-      pivot
+  def resolve
+    while pode_melhorar?
+      pivo
     end
   end
 
-  def can_improve?
-    !!entering_variable
+  def pode_melhorar?
+    !!variavel_entrada
   end
 
-  def variables
-    (0...@c.size).to_a
+  def variaveis
+    (0...@objetiva.size).to_a
   end
 
-  def entering_variable
-    variables.select { |var| @c[var] < 0 }.
-              min_by { |var| @c[var] }
+  def variavel_entrada
+    variaveis.select { |var| @objetiva[var] < 0 }.
+              min_by { |var| @objetiva[var] }
   end
 
-  def pivot
-    pivot_column = entering_variable
-    pivot_row    = pivot_row(pivot_column)
-    raise UnboundedProblem unless pivot_row
-    leaving_var  = basic_variable_in_row(pivot_row)
-    replace_basic_variable(leaving_var => pivot_column)
+  def pivo
+    pivo_coluna = variavel_entrada
+    pivo_linha = pivo_linha(pivo_coluna)
+    raise UnboundedProblem unless pivo_linha
+    var_sai = var_basica_linha(pivo_linha)
+    sub_var_basica(var_sai => pivo_coluna)
 
-    pivot_ratio = Rational(1, @a[pivot_row][pivot_column])
+    pivo_racional = Rational(1, @retricoes[pivo_linha][pivo_coluna])
 
-    # update pivot row
-    @a[pivot_row] *= pivot_ratio
-    @b[pivot_row] = pivot_ratio * @b[pivot_row]
+    # update pivo row
+    @retricoes[pivo_linha] *= pivo_racional
+    @constantes[pivo_linha] = pivo_racional * @constantes[pivo_linha]
 
     # update objective
-    @c -= @c[pivot_column] * @a[pivot_row]
+    @objetiva -= @objetiva[pivo_coluna] * @retricoes[pivo_linha]
 
     # update A and B
-    (row_indices - [pivot_row]).each do |row_ix|
-      r = @a[row_ix][pivot_column]
-      @a[row_ix] -= r * @a[pivot_row]
-      @b[row_ix] -= r * @b[pivot_row]
+    (indice_linha - [pivo_linha]).each do |row_ix|
+      r = @retricoes[row_ix][pivo_coluna]
+      @retricoes[row_ix] -= r * @retricoes[pivo_linha]
+      @constantes[row_ix] -= r * @constantes[pivo_linha]
     end
 
-    update_solution
+    att_solucao
   end
 
-  def replace_basic_variable(hash)
+  def sub_var_basica(hash)
     from, to = hash.keys.first, hash.values.first
-    @basic_vars.delete(from)
-    @basic_vars << to
-    @basic_vars.sort!
+    @vars_basicas.delete(from)
+    @vars_basicas << to
+    @vars_basicas.sort!
   end
 
-  def pivot_row(column_ix)
-    row_ix_a_and_b = row_indices.map { |row_ix|
-      [row_ix, @a[row_ix][column_ix], @b[row_ix]]
+  def pivo_linha(column_ix)
+    row_ix_a_and_b = indice_linha.map { |row_ix|
+      [row_ix, @retricoes[row_ix][column_ix], @constantes[row_ix]]
     }.reject { |_, a, b|
       a == 0
     }.reject { |_, a, b|
@@ -126,33 +118,33 @@ class Simplex
     row_ix
   end
 
-  def basic_variable_in_row(pivot_row)
+  def var_basica_linha(pivo_linha)
     column_indices.detect do |column_ix|
-      @a[pivot_row][column_ix] == 1 and @basic_vars.include?(column_ix)
+      @retricoes[pivo_linha][column_ix] == 1 and @vars_basicas.include?(column_ix)
     end
   end
 
-  def row_indices
-    (0...@a.length).to_a
+  def indice_linha
+    (0...@retricoes.length).to_a
   end
 
   def column_indices
-    (0...@a.first.size).to_a
+    (0...@retricoes.first.size).to_a
   end
 
   def formatted_tableau
-    if can_improve?
-      pivot_column = entering_variable
-      pivot_row    = pivot_row(pivot_column)
+    if pode_melhorar?
+      pivo_coluna = variavel_entrada
+      pivo_linha    = pivo_linha(pivo_coluna)
     else
-      pivot_row = nil
+      pivo_linha = nil
     end
-    num_cols = @c.size + 1
-    c = formatted_values(@c.to_a)
-    b = formatted_values(@b.to_a)
-    a = @a.to_a.map {|ar| formatted_values(ar.to_a) }
-    if pivot_row
-      a[pivot_row][pivot_column] = "*" + a[pivot_row][pivot_column]
+    num_cols = @objetiva.size + 1
+    c = formatted_values(@objetiva.to_a)
+    b = formatted_values(@constantes.to_a)
+    a = @retricoes.to_a.map {|ar| formatted_values(ar.to_a) }
+    if pivo_linha
+      a[pivo_linha][pivo_coluna] = "*" + a[pivo_linha][pivo_coluna]
     end
     max = (c + b + a + ["1234567"]).flatten.map(&:size).max
     result = []
@@ -187,6 +179,8 @@ class Simplex
   def assert(boolean)
     raise unless boolean
   end
-
 end
 
+simplex = Simplex.new([3, 5], [[1, 0], [0, 1], [3, 2]], [4, 6, 18])
+simplex.solucao
+puts simplex.formatted_tableau
